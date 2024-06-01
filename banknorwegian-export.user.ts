@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bank Norwegian transaction export
 // @namespace    http://bakemo.no/
-// @version      0.0.1
+// @version      0.0.3
 // @author       Peter Kristoffersen
 // @description  Press "-" to export the last month of transactions from all accounts
 // @match        https://www.banknorwegian.no/minside/*
@@ -30,14 +30,33 @@ class NorwegianUtilities {
 
     private static host = "https://www.banknorwegian.no/api/v1/";
     private static accountsUrl = new URL("/api/v1/transaction?accountGroupId=5", this.host);
-    private static transactionsUrl = (accountId: string) => new URL(`/api/v1/transaction/GetTransactionsFromTo?accountNo=${accountId}`, this.host);
+    private static transactionsUrlOlder = (accountId: string) => {
+        const d = new Date();
+        const dateTo = d.toISOString().slice(0, 10);
+        d.setDate(d.getDate() - 30)
+        const dateFrom = d.toISOString().slice(0, 10);
+        return new URL(`/api/v1/transaction/GetTransactionsFromTo?accountNo=${accountId}&getLastDays=false&fromLastEOC=false&dateFrom=${dateFrom}&dateTo=${dateTo}&coreDown=false`, this.host);
+    }
+    private static transactionsUrlNewer = (accountId: string) => new URL(`/api/v1/transaction/GetTransactionsFromTo?accountNo=${accountId}&getLastDays=true&fromLastEOC=false&dateFrom=&dateTo=&coreDown=false`, this.host);
+    private static myCreditCardUrl = new URL(`/minside/creditcard`, this.host)
 
     private static async fetch(url: URL) {
         const response = fetch(url, {
             "credentials": "include",
-            "method": "GET"
+            "method": "GET",
+            "headers": {
+                "accept": "application/json"
+            }
         });
         return response;
+    }
+
+    private static async getBalance(): Promise<number> {
+        const response = await this.fetch(this.myCreditCardUrl);
+        const json = await response.json();
+        console.debug(json);
+        const balance: number = json.balance;
+        return balance
     }
 
     private static async getAccountIds(): Promise<string[]> {
@@ -51,11 +70,25 @@ class NorwegianUtilities {
 
     private static async getTransactions(accountId: string): Promise<Transaction[]> {
         console.debug(`Getting transactions for account ${accountId}`)
-        const url = this.transactionsUrl(accountId);
-        const response = await this.fetch(url);
-        const responseJson: Transaction[] = await response.json();
-        console.debug(responseJson)
-        return responseJson
+        let transactions: Transaction[] = [];
+        // Get older transactions
+        {
+            const url = this.transactionsUrlOlder(accountId);
+            const response = await this.fetch(url);
+            const responseJson: Transaction[] = await response.json();
+            console.debug(responseJson)
+            transactions = responseJson;
+        }
+        // Get newer transactions
+        {
+            const url = this.transactionsUrlNewer(accountId);
+            const response = await this.fetch(url);
+            const responseJson: Transaction[] = await response.json();
+            console.debug(responseJson);
+            transactions = [...transactions, ...responseJson]
+        }
+
+        return transactions
     }
 
     private static async downloadTransactions(accountId: string) {
@@ -112,8 +145,10 @@ class NorwegianUtilities {
     private static async downloadAllAccountTransactions() {
         const accountIds = await this.getAccountIds();
         for (const accountId of accountIds) {
-            this.downloadTransactions(accountId);
+            await this.downloadTransactions(accountId);
         }
+        const balance = await this.getBalance();
+        alert(`Your balance is ${balance}`);
     }
 
     public static initialize() {
